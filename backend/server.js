@@ -6,6 +6,8 @@ import robloxRoutes from "./routes/roblox.js";
 import statsRoutes from "./routes/stats.js";
 import ingestRoutes from "./routes/ingest.js";
 const cookieParser = require("cookie-parser");
+const session = require('express-session'); // or your auth/session lib
+const discordOAuthRoutes = require('./routes/discord-oauth');
 import sessionsRoutes, { ensureSessionIndexes } from "./routes/sessions.js";
 
 const app = express();
@@ -27,6 +29,7 @@ app.use("/ingest", ingestRoutes);
 await ensureSessionIndexes();
 app.use("/sessions", sessionsRoutes);
 app.use("/", require("./routes/robloxAuth"));
+app.use(discordOAuthRoutes);
 
 app.get("/", (_req, res) => res.send("Surfari Website Backend · OK"));
 const PORT = process.env.PORT || 3000;
