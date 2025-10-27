@@ -1,16 +1,17 @@
+// routes/discord-oauth.js
 const express = require('express');
 const crypto = require('crypto');
 const fetch = global.fetch || ((...a) => import('node-fetch').then(({default:f}) => f(...a)));
 
 const router = express.Router();
 
-// GET /api/discord/oauth/start
+// GET /api/discord/oauth/start  -> redirect to Discord authorize with our state
 router.get('/api/discord/oauth/start', (req, res) => {
   const { state, purpose } = req.query;
   if (!state) return res.status(400).send('Missing state');
 
   const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-  const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI; // e.g. https://surfari.io/api/discord/oauth/callback
+  const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI; // will point to /api/discord/oauth/callback on THIS backend
   const scopes = ['identify'];
 
   const url = new URL('https://discord.com/oauth2/authorize');
@@ -24,13 +25,13 @@ router.get('/api/discord/oauth/start', (req, res) => {
   res.redirect(url.toString());
 });
 
-// GET /api/discord/oauth/callback
+// GET /api/discord/oauth/callback  -> exchange code, get Roblox identity, call bot webhook
 router.get('/api/discord/oauth/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     if (!code || !state) return res.status(400).send('Missing code/state');
 
-    // 1) Exchange code
+    // 1) Exchange code for token
     const tokenResp = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -39,27 +40,29 @@ router.get('/api/discord/oauth/callback', async (req, res) => {
         client_secret: process.env.DISCORD_CLIENT_SECRET,
         grant_type: 'authorization_code',
         code,
-        redirect_uri: process.env.DISCORD_REDIRECT_URI,
+        redirect_uri: process.env.DISCORD_REDIRECT_URI, // MUST equal this route's full URL
       }),
     });
     const tokenJson = await tokenResp.json();
     if (!tokenResp.ok) return res.status(400).json(tokenJson);
 
-    // (Optional) read Discord user
+    // (optional) read Discord user
     const meResp = await fetch('https://discord.com/api/users/@me', {
       headers: { Authorization: `${tokenJson.token_type} ${tokenJson.access_token}` },
     });
     const me = await meResp.json();
     if (!me?.id) return res.status(400).json({ error: 'discord user fetch failed' });
 
-    // 2) Get Roblox identity from your session/auth (adjust to your app)
+    // 2) Get Roblox identity from your backend session (adjust to your auth)
+    // If you don't have a session here, you can pull from your DB or bounce to login and then back.
     const robloxId = req.session?.robloxId;
     const username = req.session?.robloxUsername;
     const displayName = req.session?.robloxDisplayName || username;
+
     if (!robloxId || !username) {
-      // bounce user to your Roblox login while preserving state
+      // Send them to your website login and return here after; preserve state
       const returnTo = encodeURIComponent(`/api/discord/oauth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`);
-      return res.redirect(`/login?returnTo=${returnTo}`);
+      return res.redirect(`https://surfari.io/login?returnTo=${returnTo}`);
     }
 
     // 3) Fetch Surfari group role
@@ -73,7 +76,7 @@ router.get('/api/discord/oauth/callback', async (req, res) => {
       roleName: surfari.role?.name,
     }] : [];
 
-    // 4) POST to your bot
+    // 4) POST to your bot to finish (nickname/roles/link)
     const body = JSON.stringify({ state, robloxId, username, displayName, roles });
     const sig = process.env.SURFARI_WEBHOOK_SECRET
       ? crypto.createHmac('sha256', process.env.SURFARI_WEBHOOK_SECRET).update(body).digest('base64')
@@ -90,7 +93,7 @@ router.get('/api/discord/oauth/callback', async (req, res) => {
     const json = await r.json();
     if (!r.ok) return res.status(400).json(json);
 
-    return res.redirect('/verified'); // show success page
+    return res.redirect('https://surfari.io/verified'); // nice success page on your site
   } catch (e) {
     console.error('discord oauth callback error', e);
     return res.status(500).send('Internal error');
