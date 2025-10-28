@@ -30,7 +30,6 @@ router.get("/auth/roblox", (req, res) => {
 });
 
 
-// 2) Callback: exchange code -> get user -> ping the bot
 router.get("/auth/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
@@ -38,29 +37,33 @@ router.get("/auth/callback", async (req, res) => {
     const discordId = checkState(rawState);
     if (!code || !discordId) return res.status(400).send("Bad/missing code/state");
 
-    // Exchange code -> tokens
+    const basic = Buffer.from(
+      `${process.env.ROBLOX_CLIENT_ID}:${process.env.ROBLOX_CLIENT_SECRET}`
+    ).toString("base64");
+
     const tokenRes = await fetch("https://apis.roblox.com/oauth/v1/token", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${basic}`,
+      },
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code,
-        client_id: process.env.ROBLOX_CLIENT_ID,
-        client_secret: process.env.ROBLOX_CLIENT_SECRET,
-        redirect_uri: process.env.ROBLOX_REDIRECT_URI,
+        redirect_uri: process.env.ROBLOX_REDIRECT_URI, // EXACT same string as above and in Creator Hub
       }),
     });
+
     const tokenJson = await tokenRes.json();
     if (!tokenRes.ok) {
-      console.error("Roblox token exchange failed:", tokenJson);
+      console.error("Roblox token exchange failed:", tokenRes.status, tokenJson);
       return res.status(500).send("Token exchange failed");
     }
 
-    // Get Roblox user
     const meRes = await fetch("https://apis.roblox.com/oauth/v1/userinfo", {
       headers: { Authorization: `Bearer ${tokenJson.access_token}` },
     });
-    const me = await meRes.json();
+    const me = await meRes.json(); // includes OIDC claims: sub, name, picture (with `profile` scope)
     const robloxUserId = Number(me.sub || me.id);
     const robloxUsername = me.name || me.preferred_username || "RobloxUser";
     if (!robloxUserId) return res.status(500).send("Could not read Roblox profile");
