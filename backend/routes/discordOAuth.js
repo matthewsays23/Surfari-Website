@@ -12,19 +12,36 @@ router.get('/discord/oauth/start', (req, res) => {
   if (!state) return res.status(400).send('Missing state');
 
   const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-  const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI; // must be https://surfari.onrender.com/api/discord/oauth/callback
+  let redirect = (process.env.DISCORD_REDIRECT_URI || '').trim();
+
+  // Validate redirect URI early and clearly
+  try {
+    // This throws if it's not a valid absolute URL
+    redirect = new URL(redirect).toString();
+  } catch {
+    console.error('❌ Invalid DISCORD_REDIRECT_URI env:', process.env.DISCORD_REDIRECT_URI);
+    return res
+      .status(500)
+      .send('Server misconfiguration: DISCORD_REDIRECT_URI is not a valid absolute URL.');
+  }
+
   const scopes = ['identify'];
 
   const url = new URL('https://discord.com/oauth2/authorize');
   url.searchParams.set('client_id', DISCORD_CLIENT_ID);
-  url.searchParams.set('redirect_uri', DISCORD_REDIRECT_URI);
+  // URLSearchParams will encode this correctly; do NOT double-encode.
+  url.searchParams.set('redirect_uri', redirect);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', scopes.join(' '));
-  url.searchParams.set('state', state);
+  url.searchParams.set('state', String(state));
   if (purpose) url.searchParams.set('prompt', 'consent');
 
-  res.redirect(url.toString());
+  // Optional: one-time debug to confirm the final URL
+  console.log('[oauth/start] redirecting to:', url.toString());
+
+  return res.redirect(url.toString());
 });
+
 
 // GET /api/discord/oauth/callback -> exchange code, get Roblox identity (if available), post to bot
 router.get('/discord/oauth/callback', async (req, res) => {
