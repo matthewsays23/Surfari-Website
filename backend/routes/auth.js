@@ -10,6 +10,7 @@ const BOT_URL = process.env.BOT_URL; // e.g. https://surfari-assistant.onrender.
 const WEBHOOK_SECRET = process.env.SURFARI_WEBHOOK_SECRET;
 const STATE_SECRET = process.env.STATE_SECRET;
 const CLIENT_ID = process.env.CLIENT_ID;
+const REDIRECT_URI = process.env.REDIRECT_URI
 
 // Sign payload for bot verification
 function sign(body) {
