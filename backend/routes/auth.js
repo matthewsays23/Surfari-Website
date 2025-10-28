@@ -9,6 +9,7 @@ const SURFARI_GROUP_ID = parseInt(process.env.SURFARI_GROUP_ID, 10);
 const BOT_URL = process.env.BOT_URL; // e.g. https://surfari-assistant.onrender.com
 const WEBHOOK_SECRET = process.env.SURFARI_WEBHOOK_SECRET;
 const STATE_SECRET = process.env.STATE_SECRET;
+const CLIENT_ID = process.env.CLIENT_ID;
 
 // Sign payload for bot verification
 function sign(body) {
