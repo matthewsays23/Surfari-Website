@@ -1,139 +1,131 @@
 import express from "express";
 import axios from "axios";
+import crypto from "crypto";
 import { getDb } from "../db.js";
 
 const router = express.Router();
 
-const GROUP_ID = parseInt(process.env.SURFARI_GROUP_ID, 10);
-const ADMIN_ROLE_IDS = (process.env.SURFARI_ADMIN_ROLES || "")
-  .split(",").map(v => parseInt(v.trim(), 10)).filter(Boolean);
+const SURFARI_GROUP_ID = parseInt(process.env.SURFARI_GROUP_ID, 10);
+const BOT_URL = process.env.BOT_URL; // e.g. https://surfari-assistant.onrender.com
+const WEBHOOK_SECRET = process.env.SURFARI_WEBHOOK_SECRET;
+const STATE_SECRET = process.env.STATE_SECRET;
 
-const CLIENT_ID = process.env.ROBLOX_CLIENT_ID;
-const CLIENT_SECRET = process.env.ROBLOX_CLIENT_SECRET;
-const REDIRECT_URI = process.env.ROBLOX_REDIRECT_URI;
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+// Sign payload for bot verification
+function sign(body) {
+  return crypto.createHmac("sha256", WEBHOOK_SECRET)
+    .update(JSON.stringify(body))
+    .digest("base64");
+}
 
-// --- Login redirect ---
-router.get("/roblox", (_req, res) => {
-  const scope = "openid profile";
-  const url = `https://apis.roblox.com/oauth/v1/authorize?client_id=${CLIENT_ID}`
-    + `&response_type=code`
-    + `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`
-    + `&scope=${encodeURIComponent(scope)}`;
-  res.redirect(url);
+// ✅ Parse & check `state` from Discord
+function parseState(state) {
+  const [payload, sig] = String(state).split(".");
+  const calc = crypto.createHmac("sha256", STATE_SECRET)
+    .update(payload)
+    .digest("base64url");
+  if (sig !== calc) return null;
+  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+}
+
+// ============ Roblox Login Start ============
+router.get("/roblox", (req, res) => {
+  const { state } = req.query;
+  if (!state) return res.status(400).send("Missing state");
+  res.cookie("rs", state, { httpOnly: true, sameSite: "lax", secure: true, maxAge: 10 * 60 * 1000 });
+
+  const url = new URL("https://apis.roblox.com/oauth/v1/authorize");
+  url.searchParams.set("client_id", process.env.ROBLOX_CLIENT_ID);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("redirect_uri", process.env.ROBLOX_REDIRECT_URI);
+  url.searchParams.set("scope", "openid profile");
+
+  res.redirect(url.toString());
 });
 
-// --- OAuth callback ---
+// ============ OAuth Callback ============
 router.get("/callback", async (req, res) => {
-  const code = req.query.code;
-  if (!code) return res.status(400).json({ error: "Missing code" });
-
   try {
+    const { code } = req.query;
+    const rawState = req.cookies?.rs;
+    const st = parseState(rawState);
+    if (!st?.d || !st?.g) return res.status(400).send("Invalid or missing state");
+
+    // Exchange code → token
+    const basic = Buffer.from(
+      `${process.env.ROBLOX_CLIENT_ID}:${process.env.ROBLOX_CLIENT_SECRET}`
+    ).toString("base64");
+
     const tokenResp = await axios.post(
       "https://apis.roblox.com/oauth/v1/token",
       new URLSearchParams({
         grant_type: "authorization_code",
         code,
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: process.env.ROBLOX_REDIRECT_URI,
       }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+      { headers: { "Authorization": `Basic ${basic}` } }
     );
     const { access_token } = tokenResp.data;
 
-    const userInfo = await axios.get("https://apis.roblox.com/oauth/v1/userinfo", {
+    // Roblox user profile
+    const me = (await axios.get("https://apis.roblox.com/oauth/v1/userinfo", {
       headers: { Authorization: `Bearer ${access_token}` },
-    });
+    })).data;
 
-    const robloxUser = userInfo.data; // { sub: <userId> }
-    const token = `token-${robloxUser.sub}-${Date.now()}`;
+    const robloxUserId = Number(me.sub);
+    const robloxUsername = me.name;
 
-    // 👉 get DB *now*, inside the handler
+    // Fetch Surfari group role
+    const rolesResp = await axios.get(
+      `https://groups.roblox.com/v2/users/${robloxUserId}/groups/roles`
+    );
+    const entries = rolesResp.data?.data || [];
+    const surfariGroup = entries.find((g) => g.group?.id === SURFARI_GROUP_ID);
+    const roleRank = surfariGroup?.role?.rank ?? 0;
+    const roleName = surfariGroup?.role?.name ?? "Guest";
+
+    // Persist link
     const db = getDb();
-await db.collection("sessions").insertOne({ token, userId: robloxUser.sub, createdAt: new Date() });
-
-    res.redirect(`${FRONTEND_URL}/auth/success?token=${encodeURIComponent(token)}`);
-  } catch (err) {
-    console.error("OAuth callback error:", err.response?.data || err.message);
-    res.status(500).json({ error: "OAuth callback failed" });
-  }
-});
-
-// --- Verify (used by AccessGate) ---
-router.get("/verify", async (req, res) => {
-  try {
-    const h = req.headers.authorization || "";
-    const token = h.startsWith("Bearer ") ? h.split(" ")[1] : null;
-    if (!token) return res.status(401).json({ error: "Missing token" });
-
-    const db = getDb();
-    const session = await db.collection("sessions").findOne({ token });
-    const userId = session?.userId;
-    if (!userId) return res.status(403).json({ error: "Invalid token" });
-
-    const groupResp = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
-    const entries = groupResp.data?.data || [];
-    const surfariGroup = entries.find(g => g.group?.id === GROUP_ID);
-    const rank = surfariGroup?.role?.rank || 0;
-
-    if (!surfariGroup || (ADMIN_ROLE_IDS.length && !ADMIN_ROLE_IDS.includes(rank))) {
-      return res.status(403).json({ error: "User not an admin" });
-    }
-
-    const profile = await axios.get(`https://users.roblox.com/v1/users/${userId}`);
-    res.json({
-      status: "Access granted",
-      userId,
-      username: profile.data?.name,
-      displayName: profile.data?.displayName,
-      roleName: surfariGroup?.role?.name || "Member",
-      roleRank: rank,
-    });
-  } catch (err) {
-    console.error("Verify error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Verification failed" });
-  }
-});
-
-// --- Team list ---
-async function getGroupRole(userId) {
-  try {
-    const { data } = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
-    const match = (data.data || []).find(g => g.group?.id === GROUP_ID);
-    if (!match) return { roleName: "Not in group", roleRank: 0 };
-    return { roleName: match.role?.name ?? "Member", roleRank: match.role?.rank ?? 0 };
-  } catch (err) {
-    console.error(`getGroupRole error for ${userId}:`, err.response?.data || err.message);
-    return { roleName: "Unknown", roleRank: -1 };
-  }
-}
-
-router.get("/team", async (_req, res) => {
-  try {
-    const ADMIN_USER_IDS = (process.env.SURFARI_ADMIN_USER_IDS || "")
-      .split(",").map(v => parseInt(v.trim(), 10)).filter(Boolean);
-    if (!ADMIN_USER_IDS.length) return res.json([]);
-
-    const rows = await Promise.all(
-      ADMIN_USER_IDS.map(async (id) => {
-        const { data } = await axios.get(`https://users.roblox.com/v1/users/${id}`);
-        const role = await getGroupRole(id);
-        return {
-          userId: id,
-          username: data?.name || `User_${id}`,
-          displayName: data?.displayName || data?.name || `User_${id}`,
-          roleName: role.roleName,
-          roleRank: role.roleRank,
-        };
-      })
+    await db.collection("links").updateOne(
+      { discordId: st.d },
+      {
+        $set: {
+          discordId: st.d,
+          robloxUserId,
+          robloxUsername,
+          roleRank,
+          roleName,
+          verifiedAt: new Date(),
+        },
+      },
+      { upsert: true }
     );
 
-    rows.sort((a, b) => (b.roleRank ?? 0) - (a.roleRank ?? 0));
-    res.json(rows);
+    // Notify bot
+    const body = {
+      state: rawState,
+      robloxId: robloxUserId,
+      username: robloxUsername,
+      displayName: robloxUsername,
+      roles: [{ groupId: SURFARI_GROUP_ID, roleId: roleRank, roleName }],
+    };
+    const sig = Webhook_SECRET ? sign(body) : "";
+
+    await axios.post(`${BOT_URL}/api/discord/verify`, body, {
+      headers: sig ? { "x-surfari-signature": sig } : {},
+    }).catch(() => {});
+
+    res.clearCookie("rs");
+
+    // ✅ Friendly success page
+    return res.send(`
+      <html><body style="text-align:center;padding-top:20vh;font-family:sans-serif;">
+      <h1>✅ Verified!</h1>
+      <p>You may now close this tab and return to Discord.</p>
+      </body></html>
+    `);
   } catch (err) {
-    console.error("Team list error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to load team" });
+    console.error("Auth callback error:", err.response?.data || err);
+    return res.status(500).send("OAuth callback failed");
   }
 });
 
