@@ -22,15 +22,35 @@ app.use(cors({
 }));
 app.use(express.json());
 
+app.use(session({
+  secret: process.env.SESSION_SECRET || "dev_secret",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax"
+  }
+}));
+
+// ✅ Routes (ONE version each)
 app.use("/auth", authRoutes);
 app.use("/roblox", robloxRoutes);
 app.use("/stats", statsRoutes);
-app.use("/ingest", ingestRoutes);  
+app.use("/ingest", ingestRoutes);
+
+// ✅ Ensure session DB indexes BEFORE session-based routes
 await ensureSessionIndexes();
 app.use("/sessions", sessionsRoutes);
-app.use("/", require("./routes/robloxAuth"));
-app.use('/api', discordOAuth);
 
+// ✅ OAuth must live in API namespace
+app.use("/api", discordOAuthRoutes); // <-- important!!
+
+// ✅ Health check for Render
+app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("Surfari Website Backend · OK"));
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Backend running on :${PORT}`));
+
+export default app;
