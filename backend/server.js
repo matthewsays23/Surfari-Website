@@ -7,7 +7,7 @@ import statsRoutes from "./routes/stats.js";
 import ingestRoutes from "./routes/ingest.js";
 import cookieParser from "cookie-parser";
 import session from "express-session"; // or your auth/session lib
-const discordOAuthRoutes = require('./routes/discordOAuth.js');
+import discordOAuthRoutes from './routes/discordOAuth.js';
 import sessionsRoutes, { ensureSessionIndexes } from "./routes/sessions.js";
 
 const app = express();
