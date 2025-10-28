@@ -225,4 +225,95 @@ router.get("/callback", async (req, res) => {
   }
 });
 
+router.get("/verify", async (req, res) => {
+  try {
+    const h = req.headers.authorization || "";
+    const token = h.startsWith("Bearer ") ? h.split(" ")[1] : null;
+    if (!token) return res.status(401).json({ error: "missing_token" });
+
+    const db = getDb();
+    const session = await db.collection("sessions").findOne({ token });
+    const userId = session?.userId;
+    if (!userId) return res.status(403).json({ error: "invalid_token" });
+
+    // ENV
+    const GROUP_ID = parseInt(process.env.SURFARI_GROUP_ID || "0", 10);
+    const ADMIN_RANKS = (process.env.SURFARI_ADMIN_ROLES || "")
+      .split(",")
+      .map(v => parseInt(v.trim(), 10))
+      .filter(n => Number.isFinite(n));
+    const ADMIN_USER_IDS = (process.env.SURFARI_ADMIN_USER_IDS || "")
+      .split(",")
+      .map(v => parseInt(v.trim(), 10))
+      .filter(n => Number.isFinite(n));
+
+    if (!GROUP_ID) {
+      console.error("VERIFY MISCONFIG: SURFARI_GROUP_ID not set");
+      return res.status(500).json({ error: "server_misconfigured" });
+    }
+
+    // Fetch profile + group roles
+    const [profileRes, groupsRes] = await Promise.all([
+      axios.get(`https://users.roblox.com/v1/users/${userId}`, { validateStatus: () => true }),
+      axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`, { validateStatus: () => true }),
+    ]);
+
+    if (profileRes.status !== 200) {
+      console.error("VERIFY PROFILE ERROR:", profileRes.status, profileRes.data);
+      return res.status(502).json({ error: "roblox_profile_failed" });
+    }
+    if (groupsRes.status !== 200) {
+      console.error("VERIFY GROUPS ERROR:", groupsRes.status, groupsRes.data);
+      return res.status(502).json({ error: "roblox_groups_failed" });
+    }
+
+    const entries = Array.isArray(groupsRes.data?.data) ? groupsRes.data.data : [];
+    const surfari = entries.find(g => g.group?.id === GROUP_ID);
+    const roleRank = surfari?.role?.rank ?? 0;
+    const roleName = surfari?.role?.name ?? "Guest";
+    const isInGroup = Boolean(surfari);
+
+    // Admin checks
+    const isAdminByRank = ADMIN_RANKS.length ? ADMIN_RANKS.includes(roleRank) : false;
+    const isAdminByUser = ADMIN_USER_IDS.length ? ADMIN_USER_IDS.includes(userId) : false;
+    const isAdmin = (isInGroup && isAdminByRank) || isAdminByUser;
+
+    // Helpful server-side log
+    console.log("VERIFY DEBUG", {
+      userId,
+      username: profileRes.data?.name,
+      displayName: profileRes.data?.displayName || profileRes.data?.name,
+      groupId: GROUP_ID,
+      isInGroup,
+      roleRank,
+      roleName,
+      ADMIN_RANKS,
+      isAdminByRank,
+      isAdminByUser,
+      isAdmin,
+    });
+
+    if (!isInGroup) {
+      return res.status(403).json({ error: "not_in_group", roleRank, roleName });
+    }
+    if (!isAdmin) {
+      return res.status(403).json({ error: "not_admin", roleRank, roleName });
+    }
+
+    // Success payload (you can add more fields if your UI wants them)
+    return res.json({
+      status: "ok",
+      userId,
+      username: profileRes.data?.name,
+      displayName: profileRes.data?.displayName || profileRes.data?.name,
+      roleName,
+      roleRank,
+      isAdmin: true,
+    });
+  } catch (err) {
+    console.error("Verify error:", err.response?.data || err.message);
+    res.status(500).json({ error: "verification_failed" });
+  }
+});
+
 export default router;
