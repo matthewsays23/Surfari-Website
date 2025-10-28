@@ -13,21 +13,22 @@ function sign(body) {
     .update(JSON.stringify(body)).digest("hex");
 }
 
-// 1) Start Roblox OAuth (keep the state from the bot)
 router.get("/auth/roblox", (req, res) => {
   const { state } = req.query;
   if (!state) return res.status(400).send("Missing state");
+
   res.cookie("r_state", state, { httpOnly: true, sameSite: "lax", secure: true, maxAge: 10*60*1000 });
 
-  const url = new URL("https://authorize.roblox.com/");
+  const url = new URL("https://apis.roblox.com/oauth/v1/authorize"); // <-- fix domain + path
   url.searchParams.set("client_id", process.env.ROBLOX_CLIENT_ID);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("redirect_uri", process.env.ROBLOX_REDIRECT_URI);
+  url.searchParams.set("redirect_uri", process.env.ROBLOX_REDIRECT_URI); // EXACT match
   url.searchParams.set("scope", "openid profile");
-  url.searchParams.set("step", "accountConfirm");
   url.searchParams.set("state", state);
+  // remove nonstandard params like "step"
   res.redirect(url.toString());
 });
+
 
 // 2) Callback: exchange code -> get user -> ping the bot
 router.get("/auth/callback", async (req, res) => {
