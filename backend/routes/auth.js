@@ -31,15 +31,24 @@ function parseState(state) {
 router.get("/roblox", (req, res) => {
   const { state } = req.query;
   if (!state) return res.status(400).send("Missing state");
-  res.cookie("rs", state, { httpOnly: true, sameSite: "lax", secure: true, maxAge: 10 * 60 * 1000 });
 
-  const url = new URL("https://apis.roblox.com/oauth/v1/authorize");
-  url.searchParams.set("client_id", process.env.ROBLOX_CLIENT_ID);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("redirect_uri", process.env.ROBLOX_REDIRECT_URI);
-  url.searchParams.set("scope", "openid profile");
+  // store state in secure cookie to validate later
+  res.cookie("rs", state, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    maxAge: 10 * 60 * 1000,
+  });
 
-  res.redirect(url.toString());
+  const scope = "openid profile";
+  const url = `https://apis.roblox.com/oauth/v1/authorize`
+    + `?client_id=${CLIENT_ID}`
+    + `&response_type=code`
+    + `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`
+    + `&scope=${encodeURIComponent(scope)}`
+    + `&state=${encodeURIComponent(state)}`; // ✅ send it to Roblox too
+
+  res.redirect(url);
 });
 
 // ============ OAuth Callback ============
