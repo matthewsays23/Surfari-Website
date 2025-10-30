@@ -137,7 +137,7 @@ export default function VerificationScreen({
 
         {/* Subtle footer */}
         <div className="text-center text-xs text-orange-900/60 mt-4">
-          Surfari • Secure verification
+          Surfari • 2025
         </div>
       </div>
     </div>
