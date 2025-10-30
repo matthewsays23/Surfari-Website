@@ -1,5 +1,5 @@
 // src/pages/VerifyComplete.jsx
-import VerificationScreen from "@/components/VerificationScreen";
+import VerificationScreen from "../components/VerificationScreen";
 
 export default function VerifyComplete() {
   const params = new URLSearchParams(location.search);
