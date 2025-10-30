@@ -216,9 +216,8 @@ router.get("/callback", async (req, res) => {
     }
 
     res.clearCookie("rs");
-    // Discord verification UX
-    res.send(`<html><body style="text-align:center;padding-top:20vh;font-family:sans-serif;">
-      <h1>✅ Verified!</h1><p>You may now close this tab and return to Discord.</p></body></html>`);
+const returnTo = encodeURIComponent("https://discord.com/app"); // or a specific channel jump link
+res.redirect(`${FRONTEND_URL}/verify/complete?mode=discord&autoCloseMs=0&returnTo=${returnTo}`);
   } catch (err) {
     console.error("Auth callback error:", err.response?.data || err);
     res.status(500).send("OAuth callback failed");
